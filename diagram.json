@@ -1,0 +1,106 @@
+{
+  "version": 1,
+  "author": "Smart Parking v3 - Layout Realiste",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 300, "left": 300, "attrs": {} },
+    {
+      "type": "wokwi-hc-sr04",
+      "id": "us_entry",
+      "top": -75.3,
+      "left": -272.9,
+      "attrs": { "label": "ENTREE" }
+    },
+    {
+      "type": "wokwi-hc-sr04",
+      "id": "us_exit",
+      "top": -84.9,
+      "left": 648.7,
+      "attrs": { "label": "SORTIE" }
+    },
+    {
+      "type": "wokwi-servo",
+      "id": "srv_entry",
+      "top": 65.2,
+      "left": -384,
+      "attrs": { "label": "Barriere Entree" }
+    },
+    {
+      "type": "wokwi-servo",
+      "id": "srv_exit",
+      "top": 74.8,
+      "left": 739.2,
+      "attrs": { "label": "Barriere Sortie" }
+    },
+    {
+      "type": "wokwi-neopixel-matrix",
+      "id": "rgb_entry",
+      "top": -120,
+      "left": -60,
+      "attrs": { "rows": "1", "cols": "3", "label": "RGB Entree" }
+    },
+    {
+      "type": "wokwi-neopixel-matrix",
+      "id": "rgb_exit",
+      "top": -120,
+      "left": 480,
+      "attrs": { "rows": "1", "cols": "3", "label": "RGB Sortie" }
+    },
+    {
+      "type": "wokwi-neopixel-matrix",
+      "id": "rgb_status",
+      "top": 200,
+      "left": -60,
+      "attrs": { "rows": "1", "cols": "4", "label": "Places P1-P4" }
+    },
+    { "type": "wokwi-buzzer", "id": "buzzer", "top": 223.2, "left": 577.8, "attrs": {} },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "btn_reset",
+      "top": 430,
+      "left": 560,
+      "attrs": { "color": "red" }
+    },
+    {
+      "type": "wokwi-lcd1602",
+      "id": "lcd",
+      "top": 524.8,
+      "left": -205.6,
+      "attrs": { "pins": "i2c" }
+    }
+  ],
+  "connections": [
+    [ "esp:5V", "us_entry:VCC", "red", [] ],
+    [ "esp:5V", "us_exit:VCC", "red", [] ],
+    [ "esp:5V", "srv_entry:V+", "red", [] ],
+    [ "esp:5V", "srv_exit:V+", "red", [] ],
+    [ "esp:5V", "rgb_entry:VCC", "red", [] ],
+    [ "esp:5V", "rgb_exit:VCC", "red", [] ],
+    [ "esp:5V", "rgb_status:VCC", "red", [] ],
+    [ "esp:5V", "lcd:VCC", "red", [] ],
+    [ "esp:GND.1", "us_entry:GND", "black", [] ],
+    [ "esp:GND.1", "us_exit:GND", "black", [] ],
+    [ "esp:GND.1", "srv_entry:GND", "black", [] ],
+    [ "esp:GND.1", "srv_exit:GND", "black", [] ],
+    [ "esp:GND.1", "rgb_entry:GND", "black", [] ],
+    [ "esp:GND.1", "rgb_exit:GND", "black", [] ],
+    [ "esp:GND.1", "rgb_status:GND", "black", [] ],
+    [ "esp:GND.1", "buzzer:GND", "black", [] ],
+    [ "esp:GND.1", "lcd:GND", "black", [] ],
+    [ "esp:5", "us_entry:TRIG", "yellow", [] ],
+    [ "esp:18", "us_entry:ECHO", "orange", [] ],
+    [ "esp:19", "us_exit:TRIG", "yellow", [] ],
+    [ "esp:23", "us_exit:ECHO", "orange", [] ],
+    [ "esp:32", "srv_entry:PWM", "blue", [] ],
+    [ "esp:33", "srv_exit:PWM", "blue", [] ],
+    [ "esp:13", "rgb_entry:DIN", "green", [] ],
+    [ "esp:14", "rgb_exit:DIN", "green", [] ],
+    [ "esp:27", "rgb_status:DIN", "green", [] ],
+    [ "esp:26", "buzzer:PCMO", "purple", [] ],
+    [ "esp:4", "btn_reset:1.l", "blue", [] ],
+    [ "esp:3V3", "btn_reset:2.l", "red", [] ],
+    [ "esp:21", "lcd:SDA", "green", [] ],
+    [ "esp:22", "lcd:SCL", "purple", [] ]
+  ],
+  "dependencies": {}
+}
