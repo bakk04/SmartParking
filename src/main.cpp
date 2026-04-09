@@ -24,7 +24,7 @@
 // ── PINS ────────────────────────────────────────────────────────
 #define PIN_DHT 27
 #define PIN_TRIG 4
-#define PIN_ECHO 16
+#define PIN_ECHO 2
 #define PIN_RFID_SS 5
 #define PIN_RFID_RST 17
 #define PIN_LDR 34
@@ -121,20 +121,19 @@ int lireSonar()
 {
   // S'assurer que TRIG est LOW
   digitalWrite(PIN_TRIG, LOW);
-  delayMicroseconds(4); // FIX : était 2µs, maintenant 4µs
+  delayMicroseconds(2);
 
   // Impulsion TRIG = 10µs
   digitalWrite(PIN_TRIG, HIGH);
   delayMicroseconds(10);
   digitalWrite(PIN_TRIG, LOW);
-  delayMicroseconds(10); // FIX : stabilisation avant écoute
 
-  // FIX : timeout 60ms (était 30ms — trop court pour Wokwi)
+  // Timeout 60ms
   long duree = pulseIn(PIN_ECHO, HIGH, 60000UL);
 
   if (duree == 0)
   {
-    Serial.println(F("[SONAR] Timeout — pas d echo"));
+    Serial.println(F("[SONAR] Timeout - pas d echo"));
     return -1;
   }
   return (int)(duree / 58);
@@ -253,12 +252,7 @@ void setup()
   pinMode(PIN_LED_RED, OUTPUT);
   digitalWrite(PIN_LED_RED, HIGH);
 
-  // ─── FIX CRUCIAL : PULLDOWN sur ECHO ────────────────────────
-  // Sans INPUT_PULLDOWN, D16 flotte entre les mesures.
-  // Un pin flottant génère des HIGH parasites → pulseIn retourne
-  // une durée aléatoire → distance fausse → présence imprévisible.
-  pinMode(PIN_ECHO, INPUT_PULLDOWN);
-  // ────────────────────────────────────────────────────────────
+  pinMode(PIN_ECHO, INPUT);
 
   pinMode(PIN_LDR, INPUT);
 
@@ -366,7 +360,7 @@ void loop()
 
     // LDR
     int raw = analogRead(PIN_LDR);
-    g_lumiere_pct = constrain(map(raw, 4095, 0, 0, 100), 0, 100);
+    g_lumiere_pct = constrain(map(raw, 0, 4095, 0, 100), 0, 100);
     Serial.printf("[LDR] raw=%d  pct=%d%%\n", raw, g_lumiere_pct);
 
     // Logique lampes + LEDs
