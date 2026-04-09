@@ -190,8 +190,8 @@ void oledSalle()
   oled.setCursor(14, 0);
   oled.print(F("[ SALLE ]"));
   oled.setCursor(0, 12);
-  oled.print(F("Presence: "));
-  oled.print(g_presence ? F("OUI") : F("NON"));
+  oled.print(F("Occupee: "));
+  oled.print((g_nb_presences > 0) ? F("OUI") : F("NON"));
   oled.setCursor(0, 22);
   oled.print(F("Dist:"));
   if (g_dist > 0 && g_dist < 400)
@@ -365,10 +365,15 @@ void loop()
 
     // Logique lampes + LEDs
     bool sombre = (g_lumiere_pct < LUMIERE_SEUIL_SOMBRE);
+    bool salle_occupee = (g_nb_presences > 0);
     g_cours = enCours();
-    digitalWrite(PIN_LED_GREEN, g_presence ? HIGH : LOW);
-    digitalWrite(PIN_LED_RED, g_presence ? LOW : HIGH);
-    allumerLamps(sombre && (g_presence || g_cours));
+    
+    // LEDs rouge/verte de la porte peuvent toujours refléter le capteur immédiat 
+    // ou l'état de la salle. Utilisons l'état de la salle comme témoin d'occupation.
+    digitalWrite(PIN_LED_GREEN, salle_occupee ? HIGH : LOW);
+    digitalWrite(PIN_LED_RED, salle_occupee ? LOW : HIGH);
+    
+    allumerLamps(sombre && (salle_occupee || g_cours));
   }
 
   // ── 3. Page OLED : toutes les 4s ────────────────────────────
@@ -400,9 +405,16 @@ void loop()
     digitalWrite(PIN_LED_GREEN, ok ? HIGH : LOW);
     digitalWrite(PIN_LED_RED, ok ? LOW : HIGH);
     if (ok)
+    {
       bip(1400, 200);
+      // Le badge ok vide la salle (ex: professeur qui ferme la salle)
+      g_nb_presences = 0;
+      Serial.println(F("[!] Salle reinitialisee (0 presence) !"));
+    }
     else
+    {
       bipRefus();
+    }
 
     oledAcces(ok);
     unsigned long ws = millis();
@@ -413,8 +425,12 @@ void loop()
 
     rfid.PICC_HaltA();
     rfid.PCD_StopCrypto1();
-    digitalWrite(PIN_LED_GREEN, g_presence ? HIGH : LOW);
-    digitalWrite(PIN_LED_RED, g_presence ? LOW : HIGH);
+    
+    // Rétablir l'état visuel de la salle
+    bool salle_occupee = (g_nb_presences > 0);
+    digitalWrite(PIN_LED_GREEN, salle_occupee ? HIGH : LOW);
+    digitalWrite(PIN_LED_RED, salle_occupee ? LOW : HIGH);
+    
     t_oled = 0;
   }
 }
