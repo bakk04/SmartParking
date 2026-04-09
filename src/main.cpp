@@ -1,690 +1,426 @@
 /*
- * ╔══════════════════════════════════════════════════════════╗
- * ║    SMART PARKING v4.2 — ESP32 + HC-SR04 + NeoPixel       ║
- * ║  Correction Timers Servos & Mise à jour LEDs temps réel  ║
- * ╚══════════════════════════════════════════════════════════╝
+ * ================================================================
+ *  SMART CLASSROOM — ESP32 (Wokwi)
+ *  Version Corrigée v3 :
+ *    Fix sonar :
+ *      1. Délai LOW initial porté à 4µs
+ *      2. Délai de stabilisation 10µs après TRIG LOW final
+ *      3. Timeout pulseIn 60ms (au lieu de 30ms)
+ *      4. NOUVEAU : PIN_ECHO déclaré INPUT_PULLDOWN
+ *      5. NOUVEAU : intervalle mesure 200ms (au lieu de 150ms)
+ *    Fix DHT22 : résistance pull-up câblée dans diagram.json
+ *    Fix LDR : log Serial complet
+ * ================================================================
  */
 
 #include <Arduino.h>
-#include <Adafruit_NeoPixel.h>
-#include <ESP32Servo.h>
 #include <Wire.h>
-#include <LiquidCrystal_I2C.h>
-#include <WiFi.h>
-#include <WebServer.h>
+#include <SPI.h>
+#include <DHT.h>
+#include <MFRC522.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
 
-// ════════════════════════════════════════════════════════════
-//  CONFIGURATION
-// ════════════════════════════════════════════════════════════
+// ── PINS ────────────────────────────────────────────────────────
+#define PIN_DHT 27
+#define PIN_TRIG 4
+#define PIN_ECHO 16
+#define PIN_RFID_SS 5
+#define PIN_RFID_RST 17
+#define PIN_LDR 34
+#define PIN_RELAY 32
+#define PIN_BUZZER 33
+#define PIN_LED_W1 13
+#define PIN_LED_W2 12
+#define PIN_LED_W3 14
+#define PIN_LED_W4 15
+#define PIN_LED_GREEN 25
+#define PIN_LED_RED 26
 
-#define MAX_PLACES 4
-#define BARRIER_OPEN_MS 3500
-#define US_DETECT_CM 20
-#define US_TIMEOUT_US 15000 // Optimisation du timeout pour éviter les lags
+// ── SEUILS ──────────────────────────────────────────────────────
+#define TEMP_RELAY_ON 29.0f
+#define HUM_RELAY_ON 65.0f
+#define DIST_PRESENCE 20
+#define LUMIERE_SEUIL_SOMBRE 30
 
-#define TRIG_ENTRY 5
-#define ECHO_ENTRY 18
-#define TRIG_EXIT 19
-#define ECHO_EXIT 23
+#define OLED_ADDR 0x3C
 
-#define PIN_SRV_ENTRY 32
-#define PIN_SRV_EXIT 33
-#define SERVO_CLOSED 0
-#define SERVO_OPEN 90
-
-#define PIN_RGB_ENTRY 13
-#define PIN_RGB_EXIT 14
-#define PIN_RGB_STATUS 27
-#define NLED_GATE 3
-#define NLED_SPOTS 4
-
-#define PIN_BUZZER 26
-#define BUZZER_CHANNEL 0 // Canal LEDC dédié au buzzer
-#define PIN_BTN_RESET 4
-
-const char *WIFI_SSID = "SmartParking";
-const char *WIFI_PASS = "parking123";
-
-// ════════════════════════════════════════════════════════════
-//  COULEURS
-// ════════════════════════════════════════════════════════════
-
-#define COL_OFF 0x000000
-#define COL_GREEN 0x00E040
-#define COL_RED 0xFF1020
-#define COL_ORANGE 0xFF5500
-#define COL_BLUE 0x0055FF
-#define COL_CYAN 0x00CCFF
-#define COL_WHITE 0x303030
-#define COL_AMBER 0xFF8800
-#define COL_MINT 0x00FF88
-
-// ════════════════════════════════════════════════════════════
-//  OBJETS
-// ════════════════════════════════════════════════════════════
-
-Adafruit_NeoPixel rgbEntry(NLED_GATE, PIN_RGB_ENTRY, NEO_GRB + NEO_KHZ800);
-Adafruit_NeoPixel rgbExit(NLED_GATE, PIN_RGB_EXIT, NEO_GRB + NEO_KHZ800);
-Adafruit_NeoPixel rgbSpots(NLED_SPOTS, PIN_RGB_STATUS, NEO_GRB + NEO_KHZ800);
-
-Servo srvEntry;
-Servo srvExit;
-
-LiquidCrystal_I2C lcd(0x27, 16, 2);
-WebServer server(80);
-
-// ════════════════════════════════════════════════════════════
-//  ETAT GLOBAL
-// ════════════════════════════════════════════════════════════
-
-int placesLibres = MAX_PLACES;
-int totalEntrees = 0;
-int totalSorties = 0;
-
-bool barrEntryOpen = false;
-bool barrExitOpen = false;
-unsigned long timerEntry = 0;
-unsigned long timerExit = 0;
-
-bool lastBtnReset = false;
-
-// ════════════════════════════════════════════════════════════
-//  BUZZER NON-BLOQUANT (Remplacé par LEDC pour protéger les Servos)
-// ════════════════════════════════════════════════════════════
-
-void sysTone(uint16_t freq)
+// ── CRÉNEAUX HORAIRES ───────────────────────────────────────────
+struct Creneau
 {
-  ledcWriteTone(BUZZER_CHANNEL, freq);
-}
-void sysNoTone()
-{
-  ledcWrite(BUZZER_CHANNEL, 0);
-}
-
-struct BuzzNote
-{
-  uint16_t freq;
-  uint16_t dur;
-  uint16_t gap;
+  uint16_t debut;
+  uint16_t fin;
 };
+const Creneau COURS[] = {
+    {480, 570},
+    {585, 675},
+    {780, 870},
+    {885, 975},
+};
+const uint8_t NB_COURS = 4;
 
-#define MAX_NOTES 6
-BuzzNote buzzQueue[MAX_NOTES];
-uint8_t buzzLen = 0;
-uint8_t buzzIdx = 0;
-bool buzzActive = false;
-bool buzzInGap = false;
-unsigned long buzzTimer = 0;
-
-void buzzPlay(BuzzNote *notes, uint8_t n)
+uint16_t minSim() { return (uint16_t)((millis() / 1000UL) % 1440); }
+bool enCours()
 {
-  if (n > MAX_NOTES)
-    n = MAX_NOTES;
-  memcpy(buzzQueue, notes, n * sizeof(BuzzNote));
-  buzzLen = n;
-  buzzIdx = 0;
-  buzzActive = true;
-  buzzInGap = false;
-  sysNoTone();
-  sysTone(buzzQueue[0].freq);
-  buzzTimer = millis();
+  uint16_t t = minSim();
+  for (uint8_t i = 0; i < NB_COURS; i++)
+    if (t >= COURS[i].debut && t < COURS[i].fin)
+      return true;
+  return false;
+}
+void heureSim(char *buf6)
+{
+  uint16_t t = minSim();
+  snprintf(buf6, 6, "%02d:%02d", t / 60, t % 60);
 }
 
-void buzzTick()
+// ── RFID ────────────────────────────────────────────────────────
+const byte UIDS_OK[][4] = {
+    {0xDE, 0xAD, 0xBE, 0xEF},
+    {0xA1, 0xB2, 0xC3, 0xD4},
+};
+const uint8_t NB_UIDS = 2;
+bool uidOK(const byte *u, byte sz)
 {
-  if (!buzzActive)
-    return;
-  unsigned long now = millis();
-  BuzzNote &cur = buzzQueue[buzzIdx];
-
-  if (!buzzInGap && now - buzzTimer >= cur.dur)
-  {
-    sysNoTone();
-    buzzInGap = true;
-  }
-  if (buzzInGap && now - buzzTimer >= (unsigned long)(cur.dur + cur.gap))
-  {
-    buzzIdx++;
-    if (buzzIdx >= buzzLen)
-    {
-      buzzActive = false;
-      return;
-    }
-    buzzInGap = false;
-    buzzTimer = millis();
-    sysTone(buzzQueue[buzzIdx].freq);
-  }
+  if (sz != 4)
+    return false;
+  for (uint8_t i = 0; i < NB_UIDS; i++)
+    if (memcmp(u, UIDS_OK[i], 4) == 0)
+      return true;
+  return false;
 }
 
-void beepWelcome()
-{
-  static BuzzNote s[] = {{1047, 70, 50}, {1319, 90, 0}};
-  buzzPlay(s, 2);
-}
-void beepFull()
-{
-  static BuzzNote s[] = {{500, 80, 80}, {500, 80, 80}, {500, 80, 0}};
-  buzzPlay(s, 3);
-}
-void beepExit()
-{
-  static BuzzNote s[] = {{880, 70, 0}};
-  buzzPlay(s, 1);
-}
-void beepReset()
-{
-  static BuzzNote s[] = {{1200, 60, 50}, {1400, 80, 0}};
-  buzzPlay(s, 2);
-}
+// ── PÉRIPHÉRIQUES ───────────────────────────────────────────────
+DHT dht(PIN_DHT, DHT22);
+MFRC522 rfid(PIN_RFID_SS, PIN_RFID_RST);
+Adafruit_SSD1306 oled(128, 64, &Wire, -1);
 
-// ════════════════════════════════════════════════════════════
-//  ULTRASON
-// ════════════════════════════════════════════════════════════
+// ── ÉTAT GLOBAL ─────────────────────────────────────────────────
+float g_temp = 25.0f;
+float g_hum = 50.0f;
+int g_dist = -1;
+int g_lumiere_pct = 100;
+bool g_presence = false;
+bool g_was_presence = false;
+int g_nb_presences = 0;
+bool g_cours = false;
+bool g_lampsOn = false;
+bool g_relayOn = false;
 
-long measureCm(uint8_t trig, uint8_t echo)
+unsigned long t_dht = 0;
+unsigned long t_capteurs_rapides = 0;
+unsigned long t_oled = 0;
+unsigned long t_oled_page = 0;
+unsigned long t_rfid = 0;
+uint8_t pageOLED = 0;
+
+// ════════════════════════════════════════════════════════════════
+//  SONAR CORRIGÉ
+// ════════════════════════════════════════════════════════════════
+int lireSonar()
 {
-  digitalWrite(trig, LOW);
-  delayMicroseconds(2);
-  digitalWrite(trig, HIGH);
+  // S'assurer que TRIG est LOW
+  digitalWrite(PIN_TRIG, LOW);
+  delayMicroseconds(4); // FIX : était 2µs, maintenant 4µs
+
+  // Impulsion TRIG = 10µs
+  digitalWrite(PIN_TRIG, HIGH);
   delayMicroseconds(10);
-  digitalWrite(trig, LOW);
-  long dur = pulseIn(echo, HIGH, US_TIMEOUT_US);
-  return dur == 0 ? 999 : dur / 58L;
-}
+  digitalWrite(PIN_TRIG, LOW);
+  delayMicroseconds(10); // FIX : stabilisation avant écoute
 
-// ════════════════════════════════════════════════════════════
-//  NEOPIXEL HELPERS & ANIMATIONS
-// ════════════════════════════════════════════════════════════
+  // FIX : timeout 60ms (était 30ms — trop court pour Wokwi)
+  long duree = pulseIn(PIN_ECHO, HIGH, 60000UL);
 
-uint8_t gamma8(uint8_t v) { return (uint8_t)((v * v) >> 8); }
-
-void setGate(Adafruit_NeoPixel &strip, uint32_t col)
-{
-  for (int i = 0; i < NLED_GATE; i++)
-    strip.setPixelColor(i, col);
-  strip.show();
-}
-
-unsigned long breathTimer = 0;
-float breathPhase = 0.0f;
-
-void tickBreath(unsigned long now)
-{
-  if (now - breathTimer < 16)
-    return;
-  breathTimer = now;
-  breathPhase += 0.06f;
-  if (breathPhase > 6.2832f)
-    breathPhase -= 6.2832f;
-
-  float bri = 0.5f + 0.5f * sinf(breathPhase);
-  int occupees = MAX_PLACES - placesLibres;
-
-  // Mise à jour temps réel des places
-  for (int i = 0; i < NLED_SPOTS; i++)
+  if (duree == 0)
   {
-    if (i < occupees)
-    {
-      rgbSpots.setPixelColor(i, COL_RED); // DEVIENT ROUGE IMMÉDIATEMENT
-    }
-    else if (i == occupees && placesLibres == 1)
-    {
-      uint8_t lv = (uint8_t)(bri * 210);
-      rgbSpots.setPixelColor(i, rgbSpots.Color(lv, lv >> 2, 0));
-    }
-    else
-    {
-      uint8_t lv = (uint8_t)(170 + bri * 50);
-      rgbSpots.setPixelColor(i, rgbSpots.Color(0, gamma8(lv), gamma8(lv >> 3)));
-    }
+    Serial.println(F("[SONAR] Timeout — pas d echo"));
+    return -1;
   }
-  rgbSpots.show();
+  return (int)(duree / 58);
 }
 
-struct ChaseState
+void allumerLamps(bool on)
 {
-  bool active = false;
-  uint8_t step = 0;
-  bool isEntry = false;
-  unsigned long timer = 0;
-};
-ChaseState chaseEntry, chaseExit;
-
-void startChase(ChaseState &cs, bool entry)
-{
-  cs.active = true;
-  cs.isEntry = entry;
-  cs.step = 0;
-  cs.timer = millis();
+  g_lampsOn = on;
+  uint8_t v = on ? HIGH : LOW;
+  digitalWrite(PIN_LED_W1, v);
+  digitalWrite(PIN_LED_W2, v);
+  digitalWrite(PIN_LED_W3, v);
+  digitalWrite(PIN_LED_W4, v);
 }
 
-void tickChase(ChaseState &cs, unsigned long now)
+void bip(int freq = 1200, int ms = 100) { tone(PIN_BUZZER, freq, ms); }
+void bipRefus()
 {
-  if (!cs.active || now - cs.timer < 80)
-    return;
-  cs.timer = now;
-  Adafruit_NeoPixel &strip = cs.isEntry ? rgbEntry : rgbExit;
-  uint32_t head = cs.isEntry ? COL_CYAN : COL_MINT;
-  uint32_t tail = cs.isEntry ? 0x003040 : 0x003020;
+  tone(PIN_BUZZER, 400, 300);
+  delay(350);
+  tone(PIN_BUZZER, 300, 300);
+}
 
-  for (int i = 0; i < NLED_GATE; i++)
+// ── OLED ────────────────────────────────────────────────────────
+void oledClimat()
+{
+  oled.clearDisplay();
+  oled.setTextColor(SSD1306_WHITE);
+  oled.setTextSize(1);
+  oled.setCursor(18, 0);
+  oled.print(F("[ CLIMAT ]"));
+  oled.setTextSize(2);
+  oled.setCursor(0, 14);
+  oled.print(g_temp, 1);
+  oled.print((char)247);
+  oled.print(F("C"));
+  oled.setCursor(0, 38);
+  oled.print(g_hum, 1);
+  oled.print(F("%"));
+  oled.setTextSize(1);
+  oled.setCursor(76, 38);
+  oled.print(F("AC:"));
+  oled.print(g_relayOn ? F("ON ") : F("OFF"));
+  oled.display();
+}
+
+void oledSalle()
+{
+  char heure[6];
+  heureSim(heure);
+  oled.clearDisplay();
+  oled.setTextColor(SSD1306_WHITE);
+  oled.setTextSize(1);
+  oled.setCursor(14, 0);
+  oled.print(F("[ SALLE ]"));
+  oled.setCursor(0, 12);
+  oled.print(F("Presence: "));
+  oled.print(g_presence ? F("OUI") : F("NON"));
+  oled.setCursor(0, 22);
+  oled.print(F("Dist:"));
+  if (g_dist > 0 && g_dist < 400)
   {
-    int pos = cs.step % NLED_GATE;
-    if (i == pos)
-      strip.setPixelColor(i, head);
-    else if (i == (pos - 1 + NLED_GATE) % NLED_GATE)
-      strip.setPixelColor(i, tail);
-    else
-      strip.setPixelColor(i, COL_OFF);
+    oled.print(g_dist);
+    oled.print(F("cm "));
   }
-  strip.show();
-  cs.step++;
-}
-
-struct FlashState
-{
-  bool active = false;
-  uint8_t count = 0, total = 0;
-  uint32_t col = COL_CYAN;
-  bool phase = false;
-  unsigned long timer = 0;
-};
-FlashState flashSt;
-
-void startFlash(uint32_t col, uint8_t times)
-{
-  flashSt.active = true;
-  flashSt.count = 0;
-  flashSt.total = times;
-  flashSt.col = col;
-  flashSt.phase = true;
-  flashSt.timer = millis();
-  setGate(rgbEntry, col);
-  setGate(rgbExit, col);
-  for (int i = 0; i < NLED_SPOTS; i++)
-    rgbSpots.setPixelColor(i, col);
-  rgbSpots.show();
-}
-
-void tickFlash(unsigned long now)
-{
-  if (!flashSt.active)
-    return;
-  uint16_t dur = flashSt.phase ? 130 : 90;
-  if (now - flashSt.timer < dur)
-    return;
-
-  flashSt.timer = now;
-  flashSt.phase = !flashSt.phase;
-  uint32_t c = flashSt.phase ? flashSt.col : COL_OFF;
-
-  setGate(rgbEntry, c);
-  setGate(rgbExit, c);
-  for (int i = 0; i < NLED_SPOTS; i++)
-    rgbSpots.setPixelColor(i, c);
-  rgbSpots.show();
-
-  if (!flashSt.phase && ++flashSt.count >= flashSt.total)
-    flashSt.active = false;
-}
-
-void gateStatusRGB()
-{
-  if (!chaseEntry.active)
-    setGate(rgbEntry, (placesLibres > 0) ? COL_GREEN : COL_RED);
-  if (!chaseExit.active)
-    setGate(rgbExit, COL_BLUE);
-}
-
-// ── Fonction d'attente non-bloquante ───────────────────────
-void waitSmooth(unsigned long ms)
-{
-  unsigned long start = millis();
-  while (millis() - start < ms)
-  {
-    unsigned long now = millis();
-    buzzTick();
-    tickFlash(now);
-    tickChase(chaseEntry, now);
-    tickChase(chaseExit, now);
-    if (!flashSt.active)
-      tickBreath(now);
-    delay(15);
-  }
-}
-
-// ════════════════════════════════════════════════════════════
-//  LCD & BARRIERES
-// ════════════════════════════════════════════════════════════
-
-void updateLCD()
-{
-  lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print("Places: ");
-  lcd.print(placesLibres);
-  lcd.print("/");
-  lcd.print(MAX_PLACES);
-  lcd.setCursor(0, 1);
-  if (placesLibres == 0)
-    lcd.print("  >> COMPLET << ");
-  else if (placesLibres == 1)
-    lcd.print(" Presque plein  ");
   else
-    lcd.print("  Bienvenue !   ");
-}
-
-void openBarrierEntry()
-{
-  srvEntry.write(SERVO_OPEN);
-  barrEntryOpen = true;
-  timerEntry = millis();
-  startChase(chaseEntry, true);
-}
-void openBarrierExit()
-{
-  srvExit.write(SERVO_OPEN);
-  barrExitOpen = true;
-  timerExit = millis();
-  startChase(chaseExit, false);
-}
-void closeBarrierEntry()
-{
-  srvEntry.write(SERVO_CLOSED);
-  barrEntryOpen = false;
-  chaseEntry.active = false;
-  gateStatusRGB();
-}
-void closeBarrierExit()
-{
-  srvExit.write(SERVO_CLOSED);
-  barrExitOpen = false;
-  chaseExit.active = false;
-  gateStatusRGB();
-}
-
-void handleReset()
-{
-  Serial.println("[RESET] Remise a zero");
-  placesLibres = MAX_PLACES;
-  closeBarrierEntry();
-  closeBarrierExit();
-  beepReset();
-  startFlash(COL_CYAN, 3);
-  updateLCD();
-}
-
-// ════════════════════════════════════════════════════════════
-//  DASHBOARD WEB (Inchangé)
-// ════════════════════════════════════════════════════════════
-
-String buildPage()
-{
-  int occ = MAX_PLACES - placesLibres;
-  float pct = (float)occ / MAX_PLACES * 100.0f;
-  String c = (placesLibres == 0)   ? "#ff2244"
-             : (placesLibres == 1) ? "#ff8800"
-                                   : "#00e676";
-  String h = R"rawhtml(<!DOCTYPE html><html lang="fr">
-<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta http-equiv="refresh" content="3"><title>Smart Parking v4</title>
-<style>
-  @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;600;700&family=Share+Tech+Mono&display=swap');
-  *{margin:0;padding:0;box-sizing:border-box}
-  body{background:#080c14;color:#e0e8f0;font-family:'Rajdhani',sans-serif;min-height:100vh;padding:24px;
-       background-image:radial-gradient(ellipse at 20% 50%,#0d1a2e 0%,#080c14 60%)}
-  h1{font-size:1.9rem;font-weight:700;letter-spacing:4px;text-transform:uppercase;
-     color:#00cfff;text-shadow:0 0 18px #00cfff55;margin-bottom:4px}
-  .sub{color:#3a5070;font-family:'Share Tech Mono',monospace;font-size:.75rem;margin-bottom:28px;letter-spacing:2px}
-  .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;max-width:680px;margin:0 auto}
-  .card{background:#0d1622;border:1px solid #1a2840;border-radius:12px;padding:18px}
-  .card.full{grid-column:1/-1}
-  .label{font-size:.68rem;letter-spacing:3px;text-transform:uppercase;color:#3a5070;margin-bottom:8px}
-  .big{font-size:2.8rem;font-weight:700;font-family:'Share Tech Mono',monospace;line-height:1}
-  .bar-wrap{background:#0a1020;border-radius:6px;height:8px;overflow:hidden;margin-top:14px}
-  .bar-fill{height:100%;border-radius:6px;transition:width .6s cubic-bezier(.4,0,.2,1)}
-  .spots{display:flex;gap:10px;margin-top:10px}
-  .spot{flex:1;height:48px;border-radius:10px;display:flex;align-items:center;justify-content:center;
-        font-weight:700;font-size:.85rem;letter-spacing:1px;transition:background .4s}
-  .spot.free{background:#003322;border:1px solid #00e67644;color:#00e676}
-  .spot.taken{background:#220010;border:1px solid #ff224444;color:#ff2244}
-  .stat{font-family:'Share Tech Mono',monospace;font-size:1.5rem;color:#00cfff}
-  .dot{width:7px;height:7px;border-radius:50%;display:inline-block;margin-right:6px}
-  .status-row{display:flex;align-items:center;margin-top:6px;font-size:1rem}
-  footer{text-align:center;margin-top:22px;color:#182840;font-size:.68rem;letter-spacing:2px;
-         font-family:'Share Tech Mono',monospace}
-</style></head><body>
-<div style="max-width:680px;margin:0 auto">
-<h1>&#x1F17F; Smart Parking</h1>
-<div class="sub">ESP32 &middot; HC-SR04 &middot; NEOPIXEL &middot; LIVE v4</div>
-<div class="grid">
-  <div class="card">
-    <div class="label">Places libres</div>
-    <div class="big" style="color:)rawhtml";
-  h += c + "\">" + String(placesLibres);
-  h += "<span style=\"font-size:1.1rem;color:#3a5070\"> / " + String(MAX_PLACES) + "</span></div>";
-  h += "<div class=\"bar-wrap\"><div class=\"bar-fill\" style=\"width:" + String((int)pct) + "%;background:" + c + "\"></div></div></div>";
-  h += R"rawhtml(
-  <div class="card">
-    <div class="label">Etat</div>
-    <div class="status-row"><span class="dot" style="background:)rawhtml";
-  h += c + ";box-shadow:0 0 6px " + c + "\"></span>";
-  h += "<span style=\"font-size:1.05rem;font-weight:600\">";
-  h += (placesLibres == 0) ? "COMPLET" : (placesLibres == 1) ? "PRESQUE PLEIN"
-                                                             : "DISPONIBLE";
-  h += "</span></div><div style=\"margin-top:14px;display:flex;gap:20px\">";
-  h += "<div><div class=\"label\">Entrees</div><div class=\"stat\">" + String(totalEntrees) + "</div></div>";
-  h += "<div><div class=\"label\">Sorties</div><div class=\"stat\">" + String(totalSorties) + "</div></div>";
-  h += R"rawhtml(</div></div>
-  <div class="card full">
-    <div class="label">Places P1 &rarr; P4</div>
-    <div class="spots">)rawhtml";
-  int occ2 = MAX_PLACES - placesLibres;
-  for (int i = 0; i < MAX_PLACES; i++)
   {
-    bool taken = i < occ2;
-    h += "<div class='spot " + String(taken ? "taken" : "free") + "'>P";
-    h += String(i + 1) + (taken ? " &#9679;" : " &#9675;") + "</div>";
+    oled.print(F("---  "));
   }
-  h += R"rawhtml(</div></div>
-</div>
-<footer>AUTO-REFRESH 3s &middot; SMART PARKING v4</footer>
-</div></body></html>)rawhtml";
-  return h;
+  oled.print(F("Tot:"));
+  oled.print(g_nb_presences);
+  oled.setCursor(0, 32);
+  oled.print(F("Lumiere : "));
+  oled.print(g_lumiere_pct);
+  oled.print(F("%"));
+  oled.setCursor(0, 42);
+  oled.print(F("Lampes  : "));
+  oled.print(g_lampsOn ? F("ON ") : F("OFF"));
+  oled.setCursor(0, 52);
+  oled.print(heure);
+  oled.print(g_cours ? F(" EN COURS") : F(" LIBRE  "));
+  oled.display();
 }
 
-void startWifi()
+void oledAcces(bool ok)
 {
-  WiFi.begin("Wokwi-GUEST", "");
-  Serial.print("[WiFi] Connexion...");
-  unsigned long t0 = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - t0 < 10000)
-  {
-    delay(300);
-    Serial.print(".");
-  }
-  if (WiFi.status() == WL_CONNECTED)
-    Serial.println("\n[WiFi] IP: " + WiFi.localIP().toString());
-  else
-    Serial.println("\n[WiFi] TIMEOUT");
+  oled.clearDisplay();
+  oled.setTextColor(SSD1306_WHITE);
+  oled.setTextSize(2);
+  oled.setCursor(4, 16);
+  oled.print(ok ? F("  ACCES\nOK  :)") : F("  ACCES\n REFUSE"));
+  oled.display();
 }
 
-void setupServer()
-{
-  server.on("/", []()
-            { server.send(200, "text/html", buildPage()); });
-  server.begin();
-}
-
-// ════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════
 //  SETUP
-// ════════════════════════════════════════════════════════════
-
+// ════════════════════════════════════════════════════════════════
 void setup()
 {
   Serial.begin(115200);
+  Serial.println(F("=== Smart Classroom v3 ==="));
 
-  // Initialisation Buzzer LEDC (Évite le conflit matériel avec les Servos)
-  ledcSetup(BUZZER_CHANNEL, 2000, 8);
-  ledcAttachPin(PIN_BUZZER, BUZZER_CHANNEL);
+  pinMode(PIN_TRIG, OUTPUT);
+  digitalWrite(PIN_TRIG, LOW);
+  pinMode(PIN_RELAY, OUTPUT);
+  digitalWrite(PIN_RELAY, LOW);
+  pinMode(PIN_BUZZER, OUTPUT);
+  digitalWrite(PIN_BUZZER, LOW);
+  pinMode(PIN_LED_W1, OUTPUT);
+  pinMode(PIN_LED_W2, OUTPUT);
+  pinMode(PIN_LED_W3, OUTPUT);
+  pinMode(PIN_LED_W4, OUTPUT);
+  allumerLamps(false);
+  pinMode(PIN_LED_GREEN, OUTPUT);
+  digitalWrite(PIN_LED_GREEN, LOW);
+  pinMode(PIN_LED_RED, OUTPUT);
+  digitalWrite(PIN_LED_RED, HIGH);
 
-  // Allocation de Timers indépendants pour les Servomoteurs
-  ESP32PWM::allocateTimer(1);
-  ESP32PWM::allocateTimer(2);
-  ESP32PWM::allocateTimer(3);
+  // ─── FIX CRUCIAL : PULLDOWN sur ECHO ────────────────────────
+  // Sans INPUT_PULLDOWN, D16 flotte entre les mesures.
+  // Un pin flottant génère des HIGH parasites → pulseIn retourne
+  // une durée aléatoire → distance fausse → présence imprévisible.
+  pinMode(PIN_ECHO, INPUT_PULLDOWN);
+  // ────────────────────────────────────────────────────────────
 
-  pinMode(TRIG_ENTRY, OUTPUT);
-  pinMode(ECHO_ENTRY, INPUT);
-  pinMode(TRIG_EXIT, OUTPUT);
-  pinMode(ECHO_EXIT, INPUT);
-  pinMode(PIN_BTN_RESET, INPUT_PULLDOWN);
-
-  srvEntry.setPeriodHertz(50);
-  srvEntry.attach(PIN_SRV_ENTRY, 500, 2400);
-  srvEntry.write(SERVO_CLOSED);
-
-  srvExit.setPeriodHertz(50);
-  srvExit.attach(PIN_SRV_EXIT, 500, 2400);
-  srvExit.write(SERVO_CLOSED);
-
-  rgbEntry.begin();
-  rgbEntry.setBrightness(160);
-  rgbEntry.clear();
-  rgbEntry.show();
-  rgbExit.begin();
-  rgbExit.setBrightness(160);
-  rgbExit.clear();
-  rgbExit.show();
-  rgbSpots.begin();
-  rgbSpots.setBrightness(140);
-  rgbSpots.clear();
-  rgbSpots.show();
+  pinMode(PIN_LDR, INPUT);
 
   Wire.begin(21, 22);
-  lcd.init();
-  lcd.backlight();
-  lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print("  SMART PARKING ");
-  lcd.setCursor(0, 1);
-  lcd.print("   Demarrage... ");
+  if (oled.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR))
+  {
+    oled.clearDisplay();
+    oled.setTextSize(1);
+    oled.setTextColor(SSD1306_WHITE);
+    oled.setCursor(10, 20);
+    oled.print(F("Smart Classroom v3"));
+    oled.display();
+    Serial.println(F("[OLED] OK"));
+  }
+  else
+  {
+    Serial.println(F("[OLED] ERREUR"));
+  }
 
-  startFlash(COL_CYAN, 2);
-  startWifi();
-  setupServer();
+  dht.begin();
+  delay(2000);
+  float t = dht.readTemperature();
+  float h = dht.readHumidity();
+  if (!isnan(t) && !isnan(h))
+  {
+    g_temp = t;
+    g_hum = h;
+    Serial.printf("[DHT22] Init OK — T=%.1f C  H=%.1f%%\n", g_temp, g_hum);
+  }
+  else
+  {
+    Serial.println(F("[DHT22] Init echec"));
+  }
 
-  updateLCD();
-  gateStatusRGB();
-  Serial.println("[SYSTEM] Parking pret !");
+  SPI.begin();
+  rfid.PCD_Init();
+  Serial.println(F("[RFID] OK"));
+
+  // Test sonar immédiat au démarrage
+  delay(100);
+  int d = lireSonar();
+  if (d > 0)
+    Serial.printf("[SONAR] Test OK — %d cm\n", d);
+  else
+    Serial.println(F("[SONAR] Test : pas d obstacle — normal"));
+
+  bip(1000, 100);
+  delay(150);
+  bip(1400, 100);
+  Serial.println(F("Systeme pret."));
 }
 
-// ════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════
 //  LOOP
-// ════════════════════════════════════════════════════════════
-
+// ════════════════════════════════════════════════════════════════
 void loop()
 {
   unsigned long now = millis();
 
-  // Animations non-bloquantes (Maintenant séparées et indépendantes !)
-  buzzTick();
-  tickFlash(now);
-  tickChase(chaseEntry, now);
-  tickChase(chaseExit, now);
-
-  if (!flashSt.active)
+  // ── 1. DHT22 : toutes les 2s ────────────────────────────────
+  if (now - t_dht >= 2000UL)
   {
-    tickBreath(now); // Les places sont mises à jour en permanence
-  }
-
-  // Mesures ultrason
-  long distEntry = measureCm(TRIG_ENTRY, ECHO_ENTRY);
-  long distExit = measureCm(TRIG_EXIT, ECHO_EXIT);
-
-  // Sécurisation de la mesure : on ignore les 0 accidentels du capteur
-  bool vehicleEntry = (distEntry > 0 && distEntry < US_DETECT_CM);
-  bool vehicleExit = (distExit > 0 && distExit < US_DETECT_CM);
-
-  // ── VOIE ENTREE ──
-  static bool prevEntry = false;
-  if (vehicleEntry)
-  {
-    if (barrEntryOpen)
+    t_dht = now;
+    float t = dht.readTemperature();
+    float h = dht.readHumidity();
+    if (!isnan(t) && !isnan(h))
     {
-      timerEntry = now; // Maintien d'ouverture
+      g_temp = t;
+      g_hum = h;
+      Serial.printf("[DHT22] T=%.1f C  H=%.1f%%\n", g_temp, g_hum);
     }
-    if (!prevEntry)
+    else
     {
-      if (placesLibres > 0)
-      {
-        placesLibres--;
-        totalEntrees++;
-        openBarrierEntry();
-        beepWelcome();
-        Serial.printf("[ENTREE] dist=%ldcm libres=%d\n", distEntry, placesLibres);
-        updateLCD();
-        gateStatusRGB();
-      }
-      else
-      {
-        setGate(rgbEntry, COL_RED);
-        beepFull();
-        lcd.clear();
-        lcd.setCursor(0, 0);
-        lcd.print(" PARKING COMPLET");
-        lcd.setCursor(0, 1);
-        lcd.print("  Acces refuse  ");
-        Serial.println("[ENTREE] Refuse — complet");
-
-        waitSmooth(1800);
-
-        updateLCD();
-        gateStatusRGB();
-      }
+      Serial.println(F("[DHT22] NaN"));
     }
+    g_relayOn = (g_temp >= TEMP_RELAY_ON || g_hum >= HUM_RELAY_ON);
+    digitalWrite(PIN_RELAY, g_relayOn ? HIGH : LOW);
   }
-  prevEntry = vehicleEntry;
 
-  // ── VOIE SORTIE ──
-  static bool prevExit = false;
-  if (vehicleExit)
+  // ── 2. Sonar + LDR : toutes les 200ms ───────────────────────
+  // 200ms garantit un repos suffisant entre deux tirs HC-SR04
+  // (minimum recommandé = 60ms ; 200ms donne de la marge)
+  if (now - t_capteurs_rapides >= 200UL)
   {
-    if (barrExitOpen)
+    t_capteurs_rapides = now;
+
+    // Sonar
+    g_dist = lireSonar();
+    g_presence = (g_dist > 0 && g_dist <= DIST_PRESENCE);
+
+    if (g_dist > 0)
     {
-      timerExit = now; // Maintien d'ouverture
+      Serial.printf("[SONAR] %d cm — presence=%s\n",
+                    g_dist, g_presence ? "OUI !" : "non");
     }
-    if (!prevExit)
+
+    // Front montant = nouvelle présence → bip + compteur
+    if (g_presence && !g_was_presence)
     {
-      if (placesLibres < MAX_PLACES)
-      {
-        placesLibres++;
-        totalSorties++;
-        openBarrierExit();
-        beepExit();
-        Serial.printf("[SORTIE] dist=%ldcm libres=%d\n", distExit, placesLibres);
-        updateLCD();
-        gateStatusRGB();
-      }
+      g_nb_presences++;
+      bip(2000, 150);
+      Serial.printf("[!] PRESENCE ! Total=%d\n", g_nb_presences);
     }
-  }
-  prevExit = vehicleExit;
+    g_was_presence = g_presence;
 
-  // ── FERMETURE AUTO ──
-  if (barrEntryOpen && !vehicleEntry && now - timerEntry > BARRIER_OPEN_MS)
+    // LDR
+    int raw = analogRead(PIN_LDR);
+    g_lumiere_pct = constrain(map(raw, 4095, 0, 0, 100), 0, 100);
+    Serial.printf("[LDR] raw=%d  pct=%d%%\n", raw, g_lumiere_pct);
+
+    // Logique lampes + LEDs
+    bool sombre = (g_lumiere_pct < LUMIERE_SEUIL_SOMBRE);
+    g_cours = enCours();
+    digitalWrite(PIN_LED_GREEN, g_presence ? HIGH : LOW);
+    digitalWrite(PIN_LED_RED, g_presence ? LOW : HIGH);
+    allumerLamps(sombre && (g_presence || g_cours));
+  }
+
+  // ── 3. Page OLED : toutes les 4s ────────────────────────────
+  if (now - t_oled_page >= 4000UL)
   {
-    closeBarrierEntry();
+    t_oled_page = now;
+    pageOLED = (pageOLED + 1) % 2;
   }
-  if (barrExitOpen && !vehicleExit && now - timerExit > BARRIER_OPEN_MS)
+
+  // ── 4. Rafraîchissement OLED : toutes les 300ms ─────────────
+  if (now - t_oled >= 300UL)
   {
-    closeBarrierExit();
+    t_oled = now;
+    if (pageOLED == 0)
+      oledClimat();
+    else
+      oledSalle();
   }
 
-  // ── BOUTON RESET ──
-  bool btn = digitalRead(PIN_BTN_RESET);
-  if (btn && !lastBtnReset)
-    handleReset();
-  lastBtnReset = btn;
+  // ── 5. RFID : toutes les 1s ──────────────────────────────────
+  if ((now - t_rfid >= 1000UL) &&
+      rfid.PICC_IsNewCardPresent() &&
+      rfid.PICC_ReadCardSerial())
+  {
+    t_rfid = now;
+    bool ok = uidOK(rfid.uid.uidByte, rfid.uid.size);
+    Serial.printf("[RFID] %s\n", ok ? "AUTORISE" : "REFUSE");
 
-  server.handleClient();
-  delay(20);
+    digitalWrite(PIN_LED_GREEN, ok ? HIGH : LOW);
+    digitalWrite(PIN_LED_RED, ok ? LOW : HIGH);
+    if (ok)
+      bip(1400, 200);
+    else
+      bipRefus();
+
+    oledAcces(ok);
+    unsigned long ws = millis();
+    while (millis() - ws < 1500)
+    {
+      yield();
+    }
+
+    rfid.PICC_HaltA();
+    rfid.PCD_StopCrypto1();
+    digitalWrite(PIN_LED_GREEN, g_presence ? HIGH : LOW);
+    digitalWrite(PIN_LED_RED, g_presence ? LOW : HIGH);
+    t_oled = 0;
+  }
 }

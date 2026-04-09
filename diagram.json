@@ -1,107 +1,145 @@
 {
   "version": 1,
-  "author": "Smart Parking v3 - Layout Realiste",
+  "author": "SmartClassroom",
   "editor": "wokwi",
   "parts": [
-    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 300, "left": 300, "attrs": {} },
+    { "type": "wokwi-esp32-devkit-v1", "id": "esp32", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-rc522", "id": "rfid", "top": -220, "left": -280, "attrs": {} },
+    { "type": "wokwi-hc-sr04", "id": "sonar", "top": -200.1, "left": -368.9, "attrs": {} },
+    { "type": "wokwi-dht22", "id": "dht", "top": -201.3, "left": 90.6, "attrs": {} },
     {
-      "type": "wokwi-hc-sr04",
-      "id": "us_entry",
-      "top": -75.3,
-      "left": -272.9,
-      "attrs": { "label": "ENTREE" }
+      "type": "wokwi-resistor",
+      "id": "rDHT",
+      "top": -200,
+      "left": -58,
+      "attrs": { "value": "10000" }
     },
     {
-      "type": "wokwi-hc-sr04",
-      "id": "us_exit",
-      "top": -84.9,
-      "left": 648.7,
-      "attrs": { "label": "SORTIE" }
+      "type": "board-ssd1306",
+      "id": "oled",
+      "top": 204.74,
+      "left": 134.63,
+      "attrs": { "i2c-address": "0x3C" }
+    },
+    { "type": "wokwi-photoresistor-sensor", "id": "ldr", "top": -220, "left": 340, "attrs": {} },
+    { "type": "wokwi-relay-module", "id": "relay", "top": 120, "left": 280, "attrs": {} },
+    {
+      "type": "wokwi-buzzer",
+      "id": "buzzer",
+      "top": -208.8,
+      "left": -171,
+      "attrs": { "volume": "0.5" }
     },
     {
-      "type": "wokwi-servo",
-      "id": "srv_entry",
-      "top": 65.2,
-      "left": -384,
-      "attrs": { "label": "Barriere Entree" }
+      "type": "wokwi-led",
+      "id": "ledW1",
+      "top": 340,
+      "left": -220,
+      "attrs": { "color": "white" }
     },
     {
-      "type": "wokwi-servo",
-      "id": "srv_exit",
-      "top": 74.8,
-      "left": 739.2,
-      "attrs": { "label": "Barriere Sortie" }
+      "type": "wokwi-led",
+      "id": "ledW2",
+      "top": 340,
+      "left": -140,
+      "attrs": { "color": "white" }
+    },
+    { "type": "wokwi-led", "id": "ledW3", "top": 340, "left": -60, "attrs": { "color": "white" } },
+    { "type": "wokwi-led", "id": "ledW4", "top": 340, "left": 20, "attrs": { "color": "white" } },
+    {
+      "type": "wokwi-resistor",
+      "id": "rW1",
+      "top": 380,
+      "left": -220,
+      "attrs": { "value": "220" }
     },
     {
-      "type": "wokwi-neopixel-matrix",
-      "id": "rgb_entry",
-      "top": -120,
+      "type": "wokwi-resistor",
+      "id": "rW2",
+      "top": 380,
+      "left": -140,
+      "attrs": { "value": "220" }
+    },
+    {
+      "type": "wokwi-resistor",
+      "id": "rW3",
+      "top": 380,
       "left": -60,
-      "attrs": { "rows": "1", "cols": "3", "label": "RGB Entree" }
+      "attrs": { "value": "220" }
+    },
+    { "type": "wokwi-resistor", "id": "rW4", "top": 380, "left": 20, "attrs": { "value": "220" } },
+    { "type": "wokwi-led", "id": "ledG", "top": 200, "left": -220, "attrs": { "color": "green" } },
+    { "type": "wokwi-led", "id": "ledR", "top": 200, "left": -300, "attrs": { "color": "red" } },
+    {
+      "type": "wokwi-resistor",
+      "id": "rG",
+      "top": 240,
+      "left": -220,
+      "attrs": { "value": "220" }
     },
     {
-      "type": "wokwi-neopixel-matrix",
-      "id": "rgb_exit",
-      "top": -120,
-      "left": 480,
-      "attrs": { "rows": "1", "cols": "3", "label": "RGB Sortie" }
-    },
-    {
-      "type": "wokwi-neopixel-matrix",
-      "id": "rgb_status",
-      "top": 200,
-      "left": -60,
-      "attrs": { "rows": "1", "cols": "4", "label": "Places P1-P4" }
-    },
-    { "type": "wokwi-vcc", "id": "vcc1", "top": 200, "left": 600, "attrs": { "voltage": "5" } },
-    { "type": "wokwi-buzzer", "id": "buzzer", "top": 223.2, "left": 577.8, "attrs": {} },
-    {
-      "type": "wokwi-pushbutton",
-      "id": "btn_reset",
-      "top": 430,
-      "left": 560,
-      "attrs": { "color": "red" }
-    },
-    {
-      "type": "wokwi-lcd1602",
-      "id": "lcd",
-      "top": 524.8,
-      "left": -205.6,
-      "attrs": { "pins": "i2c" }
+      "type": "wokwi-resistor",
+      "id": "rR",
+      "top": 240,
+      "left": -300,
+      "attrs": { "value": "220" }
     }
   ],
   "connections": [
-    [ "esp:5V", "us_entry:VCC", "red", [] ],
-    [ "esp:5V", "us_exit:VCC", "red", [] ],
-    [ "esp:5V", "srv_entry:V+", "red", [] ],
-    [ "esp:5V", "srv_exit:V+", "red", [] ],
-    [ "esp:5V", "lcd:VCC", "red", [] ],
-    [ "esp:5V", "rgb_entry:VCC", "red", [] ],
-    [ "esp:5V", "rgb_exit:VCC", "red", [] ],
-    [ "esp:5V", "rgb_status:VCC", "red", [] ],
-    [ "esp:GND.1", "us_entry:GND", "black", [] ],
-    [ "esp:GND.1", "us_exit:GND", "black", [] ],
-    [ "esp:GND.1", "srv_entry:GND", "black", [] ],
-    [ "esp:GND.1", "srv_exit:GND", "black", [] ],
-    [ "esp:GND.1", "rgb_entry:GND", "black", [] ],
-    [ "esp:GND.1", "rgb_exit:GND", "black", [] ],
-    [ "esp:GND.1", "rgb_status:GND", "black", [] ],
-    [ "esp:GND.1", "buzzer:2", "black", [] ],
-    [ "esp:GND.1", "lcd:GND", "black", [] ],
-    [ "esp:5", "us_entry:TRIG", "yellow", [] ],
-    [ "esp:18", "us_entry:ECHO", "orange", [] ],
-    [ "esp:19", "us_exit:TRIG", "yellow", [] ],
-    [ "esp:23", "us_exit:ECHO", "orange", [] ],
-    [ "esp:32", "srv_entry:PWM", "blue", [] ],
-    [ "esp:33", "srv_exit:PWM", "blue", [] ],
-    [ "esp:13", "rgb_entry:DIN", "green", [] ],
-    [ "esp:14", "rgb_exit:DIN", "green", [] ],
-    [ "esp:27", "rgb_status:DIN", "green", [] ],
-    [ "esp:26", "buzzer:1", "purple", [] ],
-    [ "esp:4", "btn_reset:1.l", "blue", [] ],
-    [ "esp:3V3", "btn_reset:2.l", "red", [] ],
-    [ "esp:21", "lcd:SDA", "green", [] ],
-    [ "esp:22", "lcd:SCL", "purple", [] ]
+    ["esp32:GND.1", "rfid:GND", "black", []],
+    ["esp32:3V3", "rfid:3.3V", "red", []],
+    ["esp32:D5", "rfid:SDA", "blue", []],
+    ["esp32:D18", "rfid:SCK", "yellow", []],
+    ["esp32:D23", "rfid:MOSI", "green", []],
+    ["esp32:D19", "rfid:MISO", "purple", []],
+    ["esp32:D17", "rfid:RST", "orange", []],
+
+    ["esp32:VIN", "sonar:VCC", "red", []],
+    ["esp32:GND.2", "sonar:GND", "black", []],
+    ["esp32:D4", "sonar:TRIG", "green", []],
+    ["esp32:D16", "sonar:ECHO", "blue", []],
+
+    ["esp32:3V3", "dht:VCC", "red", []],
+    ["esp32:GND.3", "dht:GND", "black", []],
+    ["esp32:3V3", "rDHT:1", "red", []],
+    ["rDHT:2", "dht:SDA", "yellow", []],
+    ["esp32:D27", "dht:SDA", "yellow", []],
+
+    ["esp32:D21", "oled:SDA", "purple", []],
+    ["esp32:D22", "oled:SCL", "orange", []],
+    ["esp32:3V3", "oled:VCC", "red", []],
+    ["esp32:GND.4", "oled:GND", "black", []],
+
+    ["esp32:VIN", "ldr:VCC", "red", []],
+    ["esp32:GND.5", "ldr:GND", "black", []],
+    ["esp32:D34", "ldr:AO", "orange", []],
+
+    ["esp32:D32", "relay:IN", "blue", []],
+    ["esp32:VIN", "relay:VCC", "red", []],
+    ["esp32:GND.6", "relay:GND", "black", []],
+
+    ["esp32:D33", "buzzer:1", "green", []],
+    ["esp32:GND.7", "buzzer:2", "black", []],
+
+    ["esp32:D13", "rW1:1", "white", []],
+    ["rW1:2", "ledW1:A", "white", []],
+    ["esp32:GND.8", "ledW1:C", "black", []],
+    ["esp32:D12", "rW2:1", "white", []],
+    ["rW2:2", "ledW2:A", "white", []],
+    ["esp32:GND.9", "ledW2:C", "black", []],
+    ["esp32:D14", "rW3:1", "white", []],
+    ["rW3:2", "ledW3:A", "white", []],
+    ["esp32:GND.10", "ledW3:C", "black", []],
+    ["esp32:D15", "rW4:1", "white", []],
+    ["rW4:2", "ledW4:A", "white", []],
+    ["esp32:GND.11", "ledW4:C", "black", []],
+
+    ["esp32:D25", "rG:1", "lime", []],
+    ["rG:2", "ledG:A", "lime", []],
+    ["esp32:GND.12", "ledG:C", "black", []],
+    ["esp32:D26", "rR:1", "orange", []],
+    ["rR:2", "ledR:A", "orange", []],
+    ["esp32:GND.13", "ledR:C", "black", []]
   ],
   "dependencies": {}
 }
